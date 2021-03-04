@@ -1,0 +1,159 @@
+- name: Set Apt proxy
+  template:
+    src: 'apt_proxy.conf.j2'
+    dest: '/etc/apt/apt.conf.d/00proxy'
+    owner: 'root'
+    group: 'root'
+    mode: '0644'
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install base dependencies
+  apt: 
+    name: snapd
+    state: present 
+  become: yes
+  notify:
+    - Enable snapd
+    - Start snapd
+
+- name: Set Snap proxy
+  shell: |
+    snap set system proxy.http="{{ proxy_proto }}://{{ proxy_address }}"
+    snap set system proxy.https="{{ proxy_proto }}://{{ proxy_address }}"
+  args:
+    executable: /bin/bash
+
+- name: Check is ufw installed
+  shell: command -v ufw >/dev/null 2>&1
+  register: is_ufw_exist
+  ignore_errors: yes
+
+- name: Disabling ufw
+  command: ufw disable
+  become: yes
+  when: is_ufw_exist.rc == 0
+
+- name: Set ip forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: yes
+
+- name: Disable Swap
+  command: swapoff -a
+
+- name: Ensure swap file doesn't exist
+  file:
+    path: '/swapfile'
+    state: absent
+
+- name: Install microk8s
+  become: yes
+  snap:
+    name: microk8s
+    classic: yes
+    channel: "{{ version }}"
+  
+# https://microk8s.io/docs/install-proxy
+- name: Set Containerd proxy
+  template:
+    src: 'containerd-env.j2'
+    dest: /var/snap/microk8s/current/args/containerd-env
+    owner: 'root'
+    group: 'root'
+    mode: '0644'
+
+- name: Set File Descriptor Limits for Microk8s
+  lineinfile:
+    dest: /var/snap/microk8s/current/args/containerd-env
+    line: 'ulimit -n 65536 || true'
+    state: present
+
+- name: Set Locked Memory Limits for Microk8s
+  lineinfile:
+    dest: /var/snap/microk8s/current/args/containerd-env
+    line: 'ulimit -l 16384 || true'
+    state: present
+
+- name: Update docker-daemon.json file
+  template:
+    src:   docker-daemon.json
+    dest:  /etc/docker/daemon.json
+    owner: 'root'
+    group: 'root'
+  # notify:
+  #   - Stop Microk8s
+  #   - Start Microk8s
+
+- name: Stop Microk8s
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.stop
+  args:
+    executable: /bin/bash
+  retries: 3
+  delay: 10
+  register: result
+  until: result.rc == 0
+
+- name: Start Microk8s
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.start
+  args:
+    executable: /bin/bash
+  retries: 3
+  delay: 10
+  register: result
+  until: result.rc == 0
+
+- name: Microk8s status
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.status --wait-ready
+  args:
+    executable: /bin/bash
+
+- name: Alias kubectl
+  shell: source /etc/profile.d/apps-bin-path.sh && snap alias microk8s.kubectl kubectl
+  args:
+    executable: /bin/bash
+
+- name: Enable dns
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.enable dns
+  args:
+    executable: /bin/bash
+
+- name: Enable ingress
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.enable ingress
+  args:
+    executable: /bin/bash
+
+- name: Enable storage
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.enable storage
+  args:
+    executable: /bin/bash
+
+- name: Enable K8s Dashboard
+  shell: source /etc/profile.d/apps-bin-path.sh && /snap/bin/microk8s.enable dashboard
+  args:
+    executable: /bin/bash
+  when: k8s_dashboard|default(False)|bool == True
+
+# microk8s add-node [--token-ttl TOKEN_TTL] [--token TOKEN]
+#   --token-ttl TOKEN_TTL, -l TOKEN_TTL
+#       Specify how long the token is valid, before it expires.
+#   --token TOKEN, -t TOKEN
+#       Specify the bootstrap token to add, must be 32 characters long.
+
+- name: Generate a token for adding nodes
+  delegate_to: "{{ groups['cluster'][0] }}"
+  shell: /snap/bin/microk8s.add-node --token $(date +%s | sha256sum | head -c 32 ; echo) --token-ttl 3600 | sed -n 2p
+  args:
+    executable: /bin/bash
+  register: microk8s_token
+
+- name: Add node to cluster
+  shell: "{{ microk8s_token.stdout }}"
+  args:
+    executable: /bin/bash
+  register: out
+  when: inventory_hostname != groups['cluster'][0]

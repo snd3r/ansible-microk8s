@@ -1,0 +1,7 @@
+# k8s
+version: "1.19/stable"
+dashboard: False
+
+# proxy
+proxy_proto: "http"
+proxy_address: "proxy.local:3128"

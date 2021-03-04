@@ -1,0 +1,9 @@
+HTTP_PROXY="{{ proxy_proto }}://{{ proxy_address }}"
+HTTPS_PROXY="{{ proxy_proto }}://{{ proxy_address }}"
+
+NO_PROXY=10.1.0.0/16,10.152.183.0/24{% for host in ansible_play_hosts_all %},{{hostvars[host]['ansible_host']}}{% endfor %}
+
+# Attempt to change the maximum number of open file descriptors
+ulimit -n 65536 || true
+# Attempt to change the maximum locked memory limit
+ulimit -l 16384 || true

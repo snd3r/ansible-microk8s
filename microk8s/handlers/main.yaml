@@ -1,0 +1,27 @@
+- name: Enable snapd
+  service:
+    name: snapd
+    enabled: yes
+
+- name: Start snapd
+  service:
+    name: snapd
+    state: started
+
+- name: Stop Microk8s
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.stop
+  args:
+    executable: /bin/bash
+  retries: 3
+  delay: 10
+  register: result
+  until: result.rc == 0
+
+- name: Start Microk8s
+  shell: source /etc/profile.d/apps-bin-path.sh && microk8s.start
+  args:
+    executable: /bin/bash
+  retries: 3
+  delay: 10
+  register: result
+  until: result.rc == 0
